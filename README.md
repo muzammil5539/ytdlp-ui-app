@@ -30,3 +30,7 @@ Settings are environment variables (`YTDLP_UI_HOME`, `_HOST`, `_PORT`, `_MAX_CON
 | `static/index.html` | The whole UI (Queue + Schedules), no build step |
 | `test_main.py` | `uv run python test_main.py` – schedule math, scheduler tick, delete race, ffmpeg commands |
 | `docs/RUN_AS_A_SERVICE.md` | systemd + Windows Task Scheduler setup |
+
+## License
+
+[MIT](LICENSE)

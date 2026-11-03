@@ -3,6 +3,7 @@ name = "ytdlp-ui-app"
 version = "0.1.0"
 description = "Local yt-dlp web app: download queue, scheduler and ffmpeg converter"
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi",
