@@ -27,7 +27,7 @@ Run by hand: `uv run python main.py`, then open <http://127.0.0.1:8000/>.
 
 A *user* service runs as you, so downloads are yours and no root is needed.
 
-1. Create `~/.config/systemd/user/ytdlp-ui.service` (adjust the two paths if the project lives elsewhere):
+1. Create `~/.config/systemd/user/ytdlp-ui.service` (replace `/path/to/ytdlp_ui_app` with the real project folder):
 
    ```ini
    [Unit]
@@ -36,9 +36,9 @@ A *user* service runs as you, so downloads are yours and no root is needed.
    Wants=network-online.target
 
    [Service]
-   WorkingDirectory=/home/devilinside/Desktop/ytdlp_ui_app
-   ExecStart=/home/devilinside/Desktop/ytdlp_ui_app/.venv/bin/python main.py
-   # Environment=YTDLP_UI_HOME=/home/devilinside/ytdlp-data
+   WorkingDirectory=/path/to/ytdlp_ui_app
+   ExecStart=/path/to/ytdlp_ui_app/.venv/bin/python main.py
+   # Environment=YTDLP_UI_HOME=/path/to/ytdlp-data
    # Environment=YTDLP_UI_MAX_CONCURRENT=2
    Restart=on-failure
    RestartSec=5
