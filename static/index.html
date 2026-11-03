@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Antigravity Downloader</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --paper: #E6EBE6;   --panel: #F6F8F5;   --ink: #14201D;   --muted: #5A6A64;
+  --line: #C3CDC5;    --signal: #1F4FD8;  --signal-ink: #fff;
+  --amber: #A85F00;   --ok: #1B7449;      --err: #BB3326;
+  --tint-signal: #1F4FD818; --tint-amber: #A85F0018; --tint-ok: #1B744918; --tint-err: #BB332618;
+  --display: 'Bricolage Grotesque', system-ui, sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #0E1614; --panel: #15211E; --ink: #E3EBE7; --muted: #8DA09A;
+    --line: #2A3B36;  --signal: #7C9DFF; --signal-ink: #0E1614;
+    --amber: #E6A04A; --ok: #5CCB92;     --err: #FF8576;
+    --tint-signal: #7C9DFF22; --tint-amber: #E6A04A22; --tint-ok: #5CCB9222; --tint-err: #FF857622;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.45 var(--display); min-height: 100vh; }
+button, input, select, textarea { font: inherit; color: inherit; }
+textarea { font: 400 13px/1.5 var(--mono); resize: vertical; }
+.mono { font-family: var(--mono); font-size: .8em; letter-spacing: -.01em; }
+:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+
+/* ---------- shell ---------- */
+.shell { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 100vh; }
+aside { border-right: 1px solid var(--line); padding: 28px 20px; display: flex; flex-direction: column; gap: 28px; position: sticky; top: 0; height: 100vh; }
+.brand { font-weight: 700; font-size: 20px; letter-spacing: -.03em; line-height: 1.05; }
+.brand small { display: block; font: 400 12px var(--mono); color: var(--muted); letter-spacing: 0; margin-top: 6px; }
+nav { display: flex; flex-direction: column; gap: 4px; }
+nav button { all: unset; box-sizing: border-box; cursor: pointer; padding: 9px 12px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; font-weight: 500; }
+nav button:hover { background: var(--tint-signal); }
+nav button[aria-current="page"] { background: var(--ink); color: var(--paper); }
+nav button:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+nav .count { font: 500 12px var(--mono); opacity: .75; }
+.side-foot { margin-top: auto; font: 400 12px/1.6 var(--mono); color: var(--muted); }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); margin-right: 6px; }
+.dot.off { background: var(--err); }
+main { padding: 32px clamp(16px, 4vw, 48px) 64px; max-width: 980px; width: 100%; }
+h1 { font-size: 28px; letter-spacing: -.03em; margin: 0 0 4px; }
+.lede { color: var(--muted); margin: 0 0 24px; }
+h2 { font: 500 12px var(--mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 12px; }
+[hidden] { display: none !important; }
+
+/* ---------- controls ---------- */
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin-bottom: 20px; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; }
+.field { display: flex; flex-direction: column; gap: 5px; flex: 1 1 160px; min-width: 0; }
+.field.grow { flex: 3 1 260px; }
+label, .label { font: 500 12px var(--mono); color: var(--muted); }
+input[type=url], input[type=text], input[type=time], input[type=number], input[type=datetime-local], select, textarea {
+  background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; width: 100%; min-height: 42px;
+}
+input:focus, select:focus, textarea:focus { outline: 2px solid var(--signal); outline-offset: 0; border-color: var(--signal); }
+.btn { cursor: pointer; border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 10px 16px; min-height: 42px; font-weight: 500; white-space: nowrap; }
+.btn:hover { border-color: var(--ink); }
+.btn.primary { background: var(--signal); border-color: var(--signal); color: var(--signal-ink); }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn:disabled { opacity: .55; cursor: progress; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--paper); min-height: 42px; }
+.seg label { all: unset; cursor: pointer; padding: 0 14px; display: flex; align-items: center; font: 500 14px var(--display); color: var(--muted); }
+.seg input { position: absolute; opacity: 0; pointer-events: none; }
+.seg label:has(input:checked) { background: var(--ink); color: var(--paper); }
+.seg label:has(input:focus-visible) { outline: 2px solid var(--signal); outline-offset: -2px; }
+.check { display: flex; gap: 8px; align-items: center; font: 400 14px var(--display); color: var(--ink); min-height: 42px; }
+.check input { width: 18px; height: 18px; accent-color: var(--signal); }
+.tools { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { cursor: pointer; border: 1px solid var(--line); background: none; border-radius: 99px; padding: 5px 12px; font: 500 12px var(--mono); color: var(--muted); }
+.chip[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.link { cursor: pointer; background: none; border: 0; color: var(--muted); font: 500 12px var(--mono); text-decoration: underline; padding: 6px; }
+.link:hover { color: var(--ink); }
+
+/* ---------- jobs ---------- */
+.list { display: flex; flex-direction: column; gap: 8px; }
+.job { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--line); border-radius: 10px; padding: 12px 14px; display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 4px 12px; align-items: center; }
+.job.child { margin-left: 22px; padding: 9px 12px; }
+.job.s-downloading, .job.s-starting, .job.s-processing { border-left-color: var(--signal); }
+.job.s-completed { border-left-color: var(--ok); }
+.job.s-error { border-left-color: var(--err); }
+.job.s-paused { border-left-color: var(--amber); }
+.job.group { border-left-color: var(--ink); }
+.job-title { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.job-sub { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.job-meta { display: flex; gap: 12px; align-items: center; color: var(--muted); flex-wrap: wrap; grid-column: 1 / -1; }
+.badge { font: 500 11px var(--mono); text-transform: uppercase; letter-spacing: .06em; padding: 2px 8px; border-radius: 99px; background: var(--paper); }
+.s-downloading .badge, .s-starting .badge, .s-processing .badge { background: var(--tint-signal); color: var(--signal); }
+.s-completed .badge { background: var(--tint-ok); color: var(--ok); }
+.s-error .badge { background: var(--tint-err); color: var(--err); }
+.s-paused .badge { background: var(--tint-amber); color: var(--amber); }
+.tag { font: 500 11px var(--mono); border: 1px solid var(--line); border-radius: 4px; padding: 0 6px; color: var(--muted); }
+.bar { grid-column: 1 / -1; height: 5px; background: var(--paper); border-radius: 9px; overflow: hidden; margin-top: 4px; }
+.bar i { display: block; height: 100%; background: var(--signal); border-radius: 9px; transition: width .6s ease; }
+.s-completed .bar i { background: var(--ok); } .s-error .bar i { background: var(--err); } .s-paused .bar i { background: var(--amber); }
+.err { grid-column: 1 / -1; color: var(--err); font: 400 12px/1.4 var(--mono); word-break: break-word; }
+.acts { display: flex; gap: 4px; }
+.ico { cursor: pointer; width: 34px; height: 34px; display: grid; place-items: center; border-radius: 8px; border: 1px solid transparent; background: none; color: var(--muted); }
+.ico:hover { border-color: var(--line); color: var(--ink); background: var(--paper); }
+.ico.danger:hover { color: var(--err); }
+.ico svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.chev { transition: transform .15s; } .open .chev { transform: rotate(180deg); }
+.group-head { cursor: pointer; }
+.empty { border: 1px dashed var(--line); border-radius: 12px; padding: 36px 20px; text-align: center; color: var(--muted); }
+.empty b { display: block; color: var(--ink); font-size: 17px; margin-bottom: 4px; }
+
+/* ---------- schedules ---------- */
+.rail { position: relative; padding: 6px 0 0 150px; }
+.lane { position: relative; height: 26px; border-bottom: 1px solid var(--line); }
+.lane > span { position: absolute; left: -150px; width: 140px; top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
+.lane.off > span { color: var(--muted); text-decoration: line-through; }
+.lane .tick { position: absolute; top: 4px; width: 3px; height: 18px; background: var(--signal); border-radius: 2px; transform: translateX(-1px); }
+.lane.off .tick { background: var(--line); }
+.axis { position: relative; height: 22px; border-bottom: 1px solid var(--ink); }
+.axis span { position: absolute; bottom: 3px; transform: translateX(-50%); font: 400 11px var(--mono); color: var(--muted); }
+.axis span:first-child { transform: none; color: var(--ink); font-weight: 500; }
+.grid { position: absolute; left: 150px; right: 0; top: 28px; bottom: 0; pointer-events: none; }
+.gridline { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--line); opacity: .6; }
+.sched { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 6px 12px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+.sched.off { opacity: .65; }
+.sched .name { font-weight: 700; font-size: 16px; letter-spacing: -.01em; }
+.sched .facts { grid-column: 1 / -1; display: flex; gap: 6px 22px; flex-wrap: wrap; color: var(--muted); }
+.sched .facts b { color: var(--ink); font-weight: 500; }
+.when { grid-column: 1 / -1; }
+.kind-only { display: none; } .kind-daily [data-k=daily], .kind-every [data-k=every], .kind-once [data-k=once] { display: flex; }
+
+/* ---------- dialog + toast ---------- */
+dialog { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 14px; padding: 0; width: min(620px, 92vw); max-height: 84vh; }
+dialog::backdrop { background: #0008; }
+dialog form { display: flex; flex-direction: column; max-height: 84vh; }
+.dlg-h, .dlg-f { padding: 16px 20px; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.dlg-h h3 { margin: 0; font-size: 18px; letter-spacing: -.02em; }
+.dlg-list { overflow: auto; padding: 4px 20px; border-block: 1px solid var(--line); flex: 1; }
+.dlg-list label { all: unset; display: flex; gap: 10px; padding: 7px 0; cursor: pointer; align-items: baseline; }
+.dlg-list label span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 99; }
+.toast { background: var(--ink); color: var(--paper); padding: 10px 14px; border-radius: 8px; max-width: 360px; box-shadow: 0 6px 24px #0004; }
+.toast.err { background: var(--err); color: #fff; }
+
+/* ---------- small screens ---------- */
+@media (max-width: 760px) {
+  .shell { grid-template-columns: 1fr; }
+  aside { position: static; height: auto; flex-direction: row; align-items: center; justify-content: space-between; padding: 14px 16px; border-right: 0; border-bottom: 1px solid var(--line); gap: 12px; }
+  .brand small, .side-foot { display: none; }
+  nav { flex-direction: row; }
+  .rail { padding-left: 0; } .lane > span { position: static; display: block; width: auto; padding-top: 2px; font-size: 12px; } .lane { height: 44px; } .lane .tick { top: 22px; height: 18px; }
+  .axis { margin-top: 4px; } .grid { left: 0; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside>
+    <div class="brand">Antigravity<br>Downloader<small>yt-dlp, queued &amp; scheduled</small></div>
+    <nav aria-label="Sections">
+      <button data-view="queue" aria-current="page">Queue <span class="count" id="nQueue"></span></button>
+      <button data-view="schedules">Schedules <span class="count" id="nSched"></span></button>
+      <button data-view="convert">Convert</button>
+    </nav>
+    <div class="side-foot"><span class="dot" id="dot"></span><span id="conn">Connected</span><br><span id="slots"></span></div>
+  </aside>
+
+  <main>
+    <!-- ============ QUEUE ============ -->
+    <section id="view-queue">
+      <h1>Queue</h1>
+      <p class="lede">Paste a video or playlist link. Downloads resume after a restart.</p>
+
+      <form class="card" id="dlForm">
+        <div class="row">
+          <div class="field grow"><label for="url">Video or playlist link</label>
+            <input type="url" id="url" placeholder="https://www.youtube.com/watch?v=…" required autocomplete="off"></div>
+          <button class="btn primary" id="dlBtn" type="submit">Download</button>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <div class="field" style="flex:0 0 auto"><span class="label">Type</span>
+            <div class="seg"><label><input type="radio" name="fmt" value="video" checked>Video</label><label><input type="radio" name="fmt" value="audio">Audio</label></div></div>
+          <div class="field" id="qField" style="flex:0 0 130px"><label for="quality">Quality</label>
+            <select id="quality"><option value="best">Best</option><option value="1080p">1080p max</option><option value="720p">720p max</option></select></div>
+          <div class="field grow"><label for="saveDir">Save to</label>
+            <input type="text" id="saveDir" placeholder="downloads"></div>
+          <button class="btn" type="button" id="browse">Browse…</button>
+        </div>
+      </form>
+
+      <div class="tools">
+        <div class="chips" id="chips" role="group" aria-label="Filter downloads"></div>
+        <button class="link" id="clear">Clear finished</button>
+      </div>
+      <div class="list" id="jobs"></div>
+    </section>
+
+    <!-- ============ SCHEDULES ============ -->
+    <section id="view-schedules" hidden>
+      <h1>Schedules</h1>
+      <p class="lede">Check a channel or playlist on a timer and download only what’s new. Runs while this app is running — see <span class="mono">docs/RUN_AS_A_SERVICE.md</span> to keep it on.</p>
+
+      <div class="card">
+        <h2>Next 24 hours</h2>
+        <div id="rail"></div>
+      </div>
+
+      <form class="card kind-daily" id="schForm">
+        <div class="row">
+          <div class="field grow"><label for="sUrl">Channel, playlist or video link</label>
+            <input type="url" id="sUrl" required placeholder="https://www.youtube.com/@channel/videos" autocomplete="off"></div>
+          <div class="field"><label for="sName">Name <span style="opacity:.6">(optional)</span></label>
+            <input type="text" id="sName" placeholder="Morning news"></div>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <div class="field" style="flex:0 0 auto"><span class="label">Repeat</span>
+            <div class="seg"><label><input type="radio" name="kind" value="daily" checked>Daily</label><label><input type="radio" name="kind" value="every">Every…</label><label><input type="radio" name="kind" value="once">Once</label></div></div>
+          <div class="field kind-only" data-k="daily" style="flex:0 0 140px"><label for="sTime">At</label><input type="time" id="sTime" value="03:00"></div>
+          <div class="field kind-only" data-k="every" style="flex:0 0 190px"><label for="sEvery">Every</label>
+            <div style="display:flex;gap:6px"><input type="number" id="sEvery" min="1" value="6"><select id="sUnit" style="width:auto"><option value="60">hours</option><option value="1">minutes</option></select></div></div>
+          <div class="field kind-only" data-k="once" style="flex:0 0 220px"><label for="sOnce">On</label><input type="datetime-local" id="sOnce"></div>
+          <div class="field" style="flex:0 0 auto"><span class="label">Type</span>
+            <div class="seg"><label><input type="radio" name="sfmt" value="video" checked>Video</label><label><input type="radio" name="sfmt" value="audio">Audio</label></div></div>
+          <div class="field" id="sqField" style="flex:0 0 130px"><label for="sQuality">Quality</label>
+            <select id="sQuality"><option value="best">Best</option><option value="1080p">1080p max</option><option value="720p">720p max</option></select></div>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <div class="field grow"><label for="sDir">Save to</label><input type="text" id="sDir" placeholder="downloads"></div>
+          <button class="btn" type="button" id="sBrowse">Browse…</button>
+          <label class="check" id="sNowWrap"><input type="checkbox" id="sNow" checked> Also run now</label>
+          <button class="btn primary" type="submit">Add schedule</button>
+        </div>
+      </form>
+
+      <div class="list" id="scheds"></div>
+    </section>
+
+    <!-- ============ CONVERT ============ -->
+    <section id="view-convert" hidden>
+      <h1>Convert</h1>
+      <p class="lede">Change a file’s format or lower its resolution with ffmpeg. Your original files are never changed or replaced.</p>
+
+      <form class="card" id="cvForm">
+        <div class="field"><label for="cSources">Files to convert <span style="opacity:.6">(one path per line)</span></label>
+          <textarea id="cSources" rows="3" required placeholder="/home/you/Videos/clip.webm"></textarea></div>
+        <div class="row" style="margin-top:12px">
+          <button class="btn" type="button" id="cBrowse">Choose files…</button>
+          <div class="field" style="flex:0 0 180px"><label for="cFormat">Convert to</label>
+            <select id="cFormat">
+              <optgroup label="Video"><option value="mp4">MP4 (H.264)</option><option value="mkv">MKV (H.264)</option><option value="webm">WebM (VP9)</option></optgroup>
+              <optgroup label="Audio only"><option value="mp3">MP3</option><option value="m4a">M4A (AAC)</option><option value="opus">Opus</option></optgroup>
+            </select></div>
+          <div class="field" id="cResField" style="flex:0 0 200px"><label for="cHeight">Resolution <span style="opacity:.6">(never upscaled)</span></label>
+            <select id="cHeight"><option value="0">Keep original</option><option value="2160">2160p (4K)</option><option value="1440">1440p</option><option value="1080">1080p</option><option value="720">720p</option><option value="480">480p</option><option value="360">360p</option></select></div>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <div class="field grow"><label for="cDir">Save to <span style="opacity:.6">(optional)</span></label><input type="text" id="cDir" placeholder="Same folder as each source file"></div>
+          <button class="btn" type="button" id="cDirBrowse">Browse…</button>
+          <button class="btn primary" type="submit">Convert</button>
+        </div>
+      </form>
+      <p class="lede" style="margin:0">Conversions run in the same queue as downloads, so you can follow them on the Queue page.</p>
+    </section>
+  </main>
+</div>
+
+<dialog id="pick">
+  <form method="dialog" id="pickForm">
+    <div class="dlg-h"><h3 id="pickTitle">Playlist</h3><label class="check"><input type="checkbox" id="pickAll" checked> Select all</label></div>
+    <div class="dlg-list" id="pickList"></div>
+    <div class="dlg-f"><span class="mono" id="pickCount"></span><span style="display:flex;gap:8px"><button class="btn" value="cancel">Cancel</button><button class="btn primary" value="go" id="pickGo">Download selected</button></span></div>
+  </form>
+</dialog>
+<div id="toasts" role="status" aria-live="polite"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const store = { get(k, d) { try { return localStorage.getItem(k) ?? d; } catch { return d; } }, set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
+
+const I = {
+  folder: '<path d="M2 4.5h4l1.5 1.5H14v6.5H2z"/>', pause: '<path d="M5.5 3v10M10.5 3v10"/>', play: '<path d="M5 3l8 5-8 5z"/>',
+  stop: '<rect x="3.5" y="3.5" width="9" height="9" rx="1"/>', x: '<path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/>', chev: '<path d="M4 6l4 4 4-4"/>', convert: '<path d="M2 5h10l-2.5-2.5M14 11H4l2.5 2.5"/>',
+};
+const ico = (name, act, id, label, cls = '') => `<button class="ico ${cls}" data-act="${act}" data-id="${esc(id)}" title="${label}" aria-label="${label}"><svg viewBox="0 0 16 16">${I[name]}</svg></button>`;
+
+const VIEWS = ['queue', 'schedules', 'convert'];
+let jobs = [], scheds = [], cfg = {}, filter = store.get('filter', 'all'), view = VIEWS.find(v => '#' + v === location.hash) || store.get('view', 'queue');
+const expanded = new Set();
+const ACTIVE = ['queued', 'starting', 'downloading', 'processing'];
+const LABEL = { queued: 'Queued', starting: 'Starting', downloading: 'Downloading', processing: 'Finishing', completed: 'Done', error: 'Failed', paused: 'Paused' };
+
+/* ---------- api ---------- */
+async function api(path, method = 'GET', body) {
+  const r = await fetch('/api' + path, { method, headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
+  if (!r.ok) {
+    let m = r.statusText;
+    try { const j = await r.json(); m = typeof j.detail === 'string' ? j.detail : 'Check the form and try again.'; } catch {}
+    throw new Error(m);
+  }
+  return r.json();
+}
+function toast(msg, err = false) {
+  const t = document.createElement('div'); t.className = 'toast' + (err ? ' err' : ''); t.textContent = msg;
+  $('#toasts').append(t); setTimeout(() => t.remove(), err ? 6000 : 3000);
+}
+const guard = fn => async (...a) => { try { return await fn(...a); } catch (e) { toast(e.message, true); } };
+
+/* ---------- formatting ---------- */
+const bytes = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB/s' : (n / 1024).toFixed(0) + ' KB/s';
+function dur(s) { s = Math.max(0, Math.round(s)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); return h ? `${h}h ${m}m` : m ? `${m}m ${s % 60}s` : `${s}s`; }
+const clock = t => new Date(t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+function whenText(t) {
+  const d = t - Date.now() / 1000;
+  const day = new Date(t * 1000).toDateString() === new Date().toDateString() ? 'today' : new Date(t * 1000).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+  return (d <= 0 ? 'due now' : `in ${dur(d)}`) + ` · ${day} ${clock(t)}`;
+}
+function legacy(j) { // jobs written by the old version stored "42.0% (3MiB/s) - title" in `progress`
+  const m = (j.progress || '').match(/^([\d.]+)%(?:\s*\([^)]*\))?\s*-\s*(.*)$/);
+  return m ? { pct: parseFloat(m[1]), title: m[2] } : { pct: parseFloat(j.progress) || 0, title: null };
+}
+
+/* ---------- queue ---------- */
+function jobRow(j, child) {
+  const lg = legacy(j);
+  const pct = j.status === 'completed' ? 100 : (j.percent ?? lg.pct ?? 0);
+  const title = [j.file_prefix, j.title || lg.title || j.url].filter(Boolean).join('  ');
+  const act = ACTIVE.includes(j.status), conv = j.kind === 'convert';
+  const label = conv && j.status === 'downloading' ? 'Converting' : LABEL[j.status] || esc(j.status);
+  const meta = [`<span class="badge">${label}</span>`, `<span class="mono">${pct.toFixed(0)}%</span>`];
+  if (j.speed) meta.push(`<span class="mono">${bytes(j.speed)}</span>`);
+  if (j.eta && j.status === 'downloading') meta.push(`<span class="mono">${dur(j.eta)} left</span>`);
+  if (j.schedule_id) meta.push('<span class="tag">scheduled</span>');
+  if (conv) meta.push(`<span class="tag">→ ${esc(j.format.toUpperCase())}${+j.quality ? ' ' + esc(j.quality) + 'p' : ''}</span>`);
+  return `<article class="job s-${j.status} ${child ? 'child' : ''}">
+    <div style="min-width:0"><div class="job-title" title="${esc(title)}">${esc(title)}</div><div class="job-sub mono" title="${esc(j.url)}">${esc(j.url)}</div></div>
+    <div class="acts">
+      ${ico('folder', 'open', j.id, 'Open folder')}
+      ${j.status === 'completed' && j.filepath ? ico('convert', 'convert', j.id, 'Convert this file…') : ''}
+      ${!conv && ['queued', 'starting', 'downloading'].includes(j.status) ? ico('pause', 'pause', j.id, 'Pause') : ''}
+      ${['paused', 'error'].includes(j.status) ? ico('play', 'resume', j.id, j.status === 'error' || conv ? 'Retry' : 'Resume') : ''}
+      ${act ? ico('stop', 'cancel', j.id, 'Cancel download') : ''}
+      ${ico('x', 'delete', j.id, 'Remove from list', 'danger')}
+    </div>
+    <div class="job-meta">${meta.join('')}</div>
+    <div class="bar"><i style="width:${pct}%"></i></div>
+    ${j.status === 'error' && j.error ? `<div class="err">${esc(j.error)}</div>` : ''}
+  </article>`;
+}
+
+const matches = j => filter === 'all' || (filter === 'active' && (ACTIVE.includes(j.status) || j.status === 'paused')) ||
+  (filter === 'done' && j.status === 'completed') || (filter === 'failed' && j.status === 'error');
+
+function renderQueue() {
+  const kids = jobs.filter(j => j.parent_id), parents = jobs.filter(j => j.status === 'playlist');
+  const flat = jobs.filter(j => j.status !== 'playlist');
+  const n = { all: flat.length, active: flat.filter(j => ACTIVE.includes(j.status) || j.status === 'paused').length,
+    done: flat.filter(j => j.status === 'completed').length, failed: flat.filter(j => j.status === 'error').length };
+  $('#chips').innerHTML = [['all', 'All'], ['active', 'In progress'], ['done', 'Done'], ['failed', 'Failed']]
+    .map(([k, l]) => `<button class="chip" data-filter="${k}" aria-pressed="${filter === k}">${l} ${n[k]}</button>`).join('');
+
+  let html = '';
+  const shownParents = new Set();
+  for (const j of jobs) { // keep the server's newest-first order
+    if (j.status === 'playlist') {
+      const ch = kids.filter(c => c.parent_id === j.id).sort((a, b) => (a.file_prefix || '').localeCompare(b.file_prefix || ''));
+      const vis = ch.filter(matches);
+      if (!vis.length && !(filter === 'all' && !ch.length)) continue;
+      const done = ch.filter(c => c.status === 'completed').length;
+      const avg = ch.length ? ch.reduce((s, c) => s + (c.status === 'completed' ? 100 : (c.percent ?? legacy(c).pct ?? 0)), 0) / ch.length : 0;
+      const open = expanded.has(j.id);
+      const state = ch.some(c => ACTIVE.includes(c.status)) ? 'downloading' : ch.some(c => c.status === 'error') ? 'error' : ch.some(c => c.status === 'paused') ? 'paused' : done === ch.length && ch.length ? 'completed' : 'queued';
+      html += `<article class="job group s-${state} ${open ? 'open' : ''}" style="margin-top:6px">
+        <div class="group-head" data-toggle="${esc(j.id)}" style="min-width:0" role="button" tabindex="0" aria-expanded="${open}">
+          <div class="job-title">${esc(j.url)}</div><div class="job-sub mono">Playlist · ${done} of ${ch.length} done</div></div>
+        <div class="acts">${ico('folder', 'open', j.id, 'Open folder')}${ico('pause', 'pause', j.id, 'Pause all')}${ico('play', 'resume', j.id, 'Resume all')}${ico('stop', 'cancel', j.id, 'Cancel all')}${ico('x', 'delete', j.id, 'Remove playlist', 'danger')}${ico('chev', 'toggle', j.id, open ? 'Hide videos' : 'Show videos', 'chev')}</div>
+        <div class="bar"><i style="width:${avg}%"></i></div></article>`;
+      if (open) html += vis.map(c => jobRow(c, true)).join('');
+    } else if (!j.parent_id && matches(j)) html += jobRow(j, false);
+  }
+  $('#jobs').innerHTML = html || `<div class="empty"><b>${jobs.length ? 'Nothing matches this filter' : 'No downloads yet'}</b>${jobs.length ? 'Pick another filter above.' : 'Paste a link above to start one.'}</div>`;
+}
+
+/* ---------- schedules ---------- */
+function planText(s) {
+  const q = s.format === 'audio' ? 'Audio' : `Video${s.quality !== 'best' ? ' ≤' + s.quality : ''}`;
+  const rep = s.kind === 'daily' ? `Daily at ${s.at}` : s.kind === 'every' ? (s.every_min % 60 ? `Every ${s.every_min} min` : `Every ${s.every_min / 60} h`) : `Once, ${s.at.replace('T', ' ')}`;
+  return `${rep} · ${q}`;
+}
+function renderRail() {
+  if (!scheds.length) { $('#rail').innerHTML = '<div class="empty" style="border:0;padding:12px">Scheduled runs will line up here once you add one.</div>'; return; }
+  const now = Date.now() / 1000, end = now + 86400;
+  const x = t => ((t - now) / 86400 * 100).toFixed(2) + '%';
+  const hours = []; // every 3rd local clock hour in the window
+  for (let t = new Date().setMinutes(0, 0, 0) + 3600000; t / 1000 < end; t += 3600000) if (new Date(t).getHours() % 3 === 0 && (t / 1000 - now) / 86400 > 0.05) hours.push(t / 1000); // skip a tick that would sit under the "now" label
+  const lanes = scheds.map(s => {
+    const ticks = [];
+    if (s.next_run && s.kind === 'every') for (let t = s.next_run; t < end && ticks.length < 200; t += s.every_min * 60) { if (t >= now) ticks.push(t); }
+    else if (s.next_run && s.next_run < end) ticks.push(Math.max(s.next_run, now));
+    return `<div class="lane ${s.enabled ? '' : 'off'}"><span title="${esc(s.name)}">${esc(s.name)}</span>${ticks.map(t => `<i class="tick" style="left:${x(t)}" title="${clock(t)}"></i>`).join('')}</div>`;
+  }).join('');
+  $('#rail').innerHTML = `<div class="rail"><div class="grid">${hours.map(t => `<div class="gridline" style="left:${x(t)}"></div>`).join('')}</div>
+    <div class="axis"><span>now</span>${hours.map(t => `<span style="left:${x(t)}">${new Date(t * 1000).getHours()}:00</span>`).join('')}</div>${lanes}</div>`;
+}
+function renderScheds() {
+  renderRail();
+  $('#scheds').innerHTML = scheds.map(s => {
+    const next = s.enabled && s.next_run ? whenText(s.next_run) : s.kind === 'once' && s.last_run ? 'Finished' : 'Paused';
+    return `<article class="sched ${s.enabled ? '' : 'off'}">
+      <div style="min-width:0"><div class="name">${esc(s.name)}</div><div class="job-sub mono" title="${esc(s.url)}">${esc(s.url)}</div></div>
+      <div class="acts">
+        <button class="btn" data-sact="run" data-id="${esc(s.id)}">Run now</button>
+        <button class="btn" data-sact="toggle" data-id="${esc(s.id)}">${s.enabled ? 'Pause' : s.kind === 'once' ? 'Run again' : 'Resume'}</button>
+        ${ico('x', 'sdelete', s.id, 'Delete schedule', 'danger')}
+      </div>
+      <div class="facts mono"><span>${esc(planText(s))}</span><span>Next: <b>${next}</b></span><span>Last: <b>${s.last_run ? esc(s.last_result || '—') + ' · ' + new Date(s.last_run * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'never run'}</b></span></div>
+    </article>`;
+  }).join('') || '<div class="empty"><b>No schedules yet</b>Add a channel or playlist above and it will be checked on the timer you pick.</div>';
+}
+
+/* ---------- polling ---------- */
+function render() {
+  $('#nSched').textContent = scheds.filter(s => s.enabled).length || '';
+  $('#nQueue').textContent = jobs.filter(j => j.status !== 'playlist' && (ACTIVE.includes(j.status) || j.status === 'paused')).length || '';
+  if (view === 'queue') renderQueue(); else if (view === 'schedules') renderScheds();
+}
+async function poll() {
+  try {
+    [jobs, scheds] = await Promise.all([api('/jobs'), api('/schedules')]);
+    $('#dot').className = 'dot'; $('#conn').textContent = 'Connected'; render();
+  } catch { $('#dot').className = 'dot off'; $('#conn').textContent = 'Server unreachable'; }
+  setTimeout(poll, view === 'schedules' ? 5000 : 1500);
+}
+function setView(v) {
+  view = v; store.set('view', v);
+  VIEWS.forEach(n => $('#view-' + n).hidden = n !== v);
+  document.querySelectorAll('nav button').forEach(b => b.dataset.view === v ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current'));
+  render();
+}
+
+/* ---------- shared form helpers ---------- */
+const radio = name => document.querySelector(`input[name=${name}]:checked`).value;
+async function browseInto(input, mode = 'dir') {
+  const r = await api('/browse?mode=' + mode);
+  if (!r.path) return toast('Nothing chosen. If no picker opened, type the path instead.');
+  input.value = mode === 'files' ? r.paths.join('\n') : r.path;
+  if (mode === 'dir') store.set('saveDir', r.path);
+}
+
+/* ---------- queue actions ---------- */
+$('#dlForm').addEventListener('submit', guard(async e => {
+  e.preventDefault();
+  const url = $('#url').value.trim(), btn = $('#dlBtn');
+  btn.disabled = true; btn.textContent = 'Checking link…';
+  try {
+    let r = {};
+    try { r = await api('/resolve', 'POST', { url }); } catch {}
+    if (r.type === 'playlist') return openPicker(r);
+    if (r.error) toast('Could not read that link; queued it anyway. ' + r.error.slice(0, 120), true);
+    await queue(url);
+  } finally { btn.disabled = false; btn.textContent = 'Download'; }
+}));
+const opts = () => ({ format: radio('fmt'), quality: $('#quality').value, save_dir: $('#saveDir').value.trim() });
+async function queue(url) { store.set('saveDir', $('#saveDir').value); await api('/download', 'POST', { url, ...opts() }); $('#url').value = ''; toast('Added to queue'); poll1(); }
+const poll1 = async () => { try { jobs = await api('/jobs'); render(); } catch {} };
+
+let picked = null;
+function openPicker(r) {
+  picked = r; $('#pickTitle').textContent = r.title;
+  $('#pickList').innerHTML = r.entries.filter(e => e.url).map((e, i) => `<label><input type="checkbox" checked data-i="${i}"><span class="mono">${String(i + 1).padStart(2, '0')}</span><span>${esc(e.title)}</span></label>`).join('');
+  $('#pickAll').checked = true; countPicked(); $('#pick').showModal();
+}
+const boxes = () => [...document.querySelectorAll('#pickList input')];
+function countPicked() { const n = boxes().filter(b => b.checked).length; $('#pickCount').textContent = `${n} of ${boxes().length} selected`; $('#pickGo').disabled = !n; }
+$('#pickList').addEventListener('change', countPicked);
+$('#pickAll').addEventListener('change', e => { boxes().forEach(b => b.checked = e.target.checked); countPicked(); });
+$('#pick').addEventListener('close', guard(async () => {
+  if ($('#pick').returnValue !== 'go') return;
+  const items = boxes().filter(b => b.checked).map(b => picked.entries.filter(e => e.url)[b.dataset.i]);
+  store.set('saveDir', $('#saveDir').value);
+  await api('/download_batch', 'POST', { parent_title: picked.title, items, ...opts() });
+  $('#url').value = ''; toast(`Queued ${items.length} videos`); poll1();
+}));
+
+$('#browse').onclick = guard(() => browseInto($('#saveDir')));
+$('#clear').onclick = guard(async () => { await api('/clear_finished', 'POST'); poll1(); });
+document.querySelectorAll('input[name=fmt]').forEach(r => r.onchange = () => $('#qField').hidden = radio('fmt') === 'audio');
+
+document.addEventListener('click', guard(async e => {
+  const f = e.target.closest('[data-filter]'); if (f) { filter = f.dataset.filter; store.set('filter', filter); return renderQueue(); }
+  const t = e.target.closest('[data-toggle]'); if (t) { const id = t.dataset.toggle; expanded.has(id) ? expanded.delete(id) : expanded.add(id); return renderQueue(); }
+  const b = e.target.closest('[data-act]'); if (b) {
+    const { act, id } = b.dataset;
+    if (act === 'toggle') { expanded.has(id) ? expanded.delete(id) : expanded.add(id); return renderQueue(); }
+    if (act === 'convert') { $('#cSources').value = jobs.find(j => j.id === id).filepath; return setView('convert'); }
+    if (act === 'sdelete') { await api('/schedules/' + id, 'DELETE'); toast('Schedule deleted'); return poll1().then(refreshScheds); }
+    await api(act === 'delete' ? '/jobs/' + id : `/${act}/${id}`, act === 'delete' ? 'DELETE' : 'POST');
+    return poll1();
+  }
+  const s = e.target.closest('[data-sact]'); if (s) {
+    const { sact, id } = s.dataset;
+    await api(`/schedules/${id}/${sact}`, 'POST'); if (sact === 'run') toast('Started a run');
+    refreshScheds();
+  }
+}));
+document.addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.group-head')) { e.preventDefault(); e.target.click(); } });
+const refreshScheds = async () => { try { scheds = await api('/schedules'); jobs = await api('/jobs'); render(); } catch {} };
+
+/* ---------- schedule form ---------- */
+const syncKind = () => { $('#schForm').className = 'card kind-' + radio('kind'); $('#sNowWrap').hidden = radio('kind') === 'once'; };
+document.querySelectorAll('input[name=kind]').forEach(r => r.onchange = syncKind);
+document.querySelectorAll('input[name=sfmt]').forEach(r => r.onchange = () => $('#sqField').hidden = radio('sfmt') === 'audio');
+$('#sBrowse').onclick = guard(() => browseInto($('#sDir')));
+$('#schForm').addEventListener('submit', guard(async e => {
+  e.preventDefault();
+  const kind = radio('kind');
+  const body = { name: $('#sName').value, url: $('#sUrl').value.trim(), format: radio('sfmt'), quality: $('#sQuality').value, save_dir: $('#sDir').value.trim(), kind,
+    run_now: kind !== 'once' && $('#sNow').checked,
+    at: kind === 'daily' ? $('#sTime').value : kind === 'once' ? $('#sOnce').value : '',
+    every_min: kind === 'every' ? Math.round(+$('#sEvery').value * +$('#sUnit').value) : 0 };
+  if (kind === 'once' && !body.at) throw new Error('Pick a date and time for the one-off run.');
+  await api('/schedules', 'POST', body);
+  $('#sUrl').value = ''; $('#sName').value = ''; toast('Schedule added'); refreshScheds();
+}));
+
+/* ---------- convert ---------- */
+const AUDIO = ['mp3', 'm4a', 'opus'];
+$('#cFormat').onchange = () => $('#cResField').hidden = AUDIO.includes($('#cFormat').value);
+$('#cBrowse').onclick = guard(() => browseInto($('#cSources'), 'files'));
+$('#cDirBrowse').onclick = guard(() => browseInto($('#cDir')));
+$('#cvForm').addEventListener('submit', guard(async e => {
+  e.preventDefault();
+  const format = $('#cFormat').value;
+  const r = await api('/convert', 'POST', { sources: $('#cSources').value.split('\n').map(x => x.trim()).filter(Boolean), format,
+    height: AUDIO.includes(format) ? 0 : +$('#cHeight').value, save_dir: $('#cDir').value.trim() });
+  $('#cSources').value = ''; toast(`Converting ${r.queued} file${r.queued > 1 ? 's' : ''}`); setView('queue'); poll1();
+}));
+
+/* ---------- boot ---------- */
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => setView(b.dataset.view));
+$('#saveDir').value = store.get('saveDir', '');
+(async () => {
+  try { cfg = await api('/config'); $('#slots').textContent = `${cfg.max_concurrent} parallel slots`; $('#saveDir').placeholder = $('#sDir').placeholder = cfg.default_save_dir; } catch {}
+  const d = new Date(Date.now() + 3600000); d.setMinutes(0); d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  $('#sOnce').value = d.toISOString().slice(0, 16);
+  syncKind(); setView(view); poll();
+})();
+</script>
+</body>
+</html>

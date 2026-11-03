@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.venv
+
+# App data
+jobs.db*
+downloads/
+archives/
+server.log
+
+# Local agent tooling (not part of the app)
+.agents/
