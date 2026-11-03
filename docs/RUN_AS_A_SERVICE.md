@@ -17,6 +17,7 @@ soon as the app is back up (it won't replay every missed slot).
 | `YTDLP_UI_PORT` | `8000` | Port. |
 | `YTDLP_UI_MAX_CONCURRENT` | `3` | Parallel downloads. |
 | `YTDLP_UI_MIN_FREE_GB` | `5` | A download refuses to start with less free space than this. |
+| `YTDLP_UI_SUB_LANGS` | *(empty)* | Subtitle languages to fetch, e.g. `en` or `en,es`. Empty = no subtitles. |
 
 Install once: `uv sync` (needs `ffmpeg` on PATH for audio extraction and subtitle embedding).
 Run by hand: `uv run python main.py`, then open <http://127.0.0.1:8000/>.

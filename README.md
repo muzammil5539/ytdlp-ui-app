@@ -20,7 +20,7 @@ uv sync
 uv run python main.py        # http://127.0.0.1:8000/
 ```
 
-Settings are environment variables (`YTDLP_UI_HOME`, `_HOST`, `_PORT`, `_MAX_CONCURRENT`, `_MIN_FREE_GB`); defaults and meanings are in the service doc. The app has **no login** and listens on localhost only by default.
+Settings are environment variables (`YTDLP_UI_HOME`, `_HOST`, `_PORT`, `_MAX_CONCURRENT`, `_MIN_FREE_GB`, `_SUB_LANGS`); defaults and meanings are in the service doc. The app has **no login** and listens on localhost only by default.
 
 ## Layout
 

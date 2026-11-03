@@ -34,6 +34,7 @@ HOST = os.environ.get("YTDLP_UI_HOST", "127.0.0.1")
 PORT = int(os.environ.get("YTDLP_UI_PORT", "8000"))
 MAX_CONCURRENT = int(os.environ.get("YTDLP_UI_MAX_CONCURRENT", "3"))
 MIN_FREE_GB = float(os.environ.get("YTDLP_UI_MIN_FREE_GB", "5"))
+SUB_LANGS = [x for x in os.environ.get("YTDLP_UI_SUB_LANGS", "").split(",") if x.strip()]  # e.g. "en" or "en,es"; empty = no subtitles
 TICK_SECONDS = 20
 ACTIVE = ("queued", "starting", "downloading", "processing")
 ACTIVE_SQL = "(" + ",".join(repr(s) for s in ACTIVE) + ")"  # constants, never user input
@@ -175,9 +176,7 @@ def execute_download(job: dict):
         "retries": 10,
         "fragment_retries": 10,
         "no_color": True,
-        "writesubtitles": True,
-        "writeautomaticsub": True,
-        "subtitleslangs": ["en"],
+        "subtitleslangs": [x.strip() for x in SUB_LANGS],
     }
     if sid:  # scheduled run: whole URL (maybe a playlist/channel), skip what an earlier run got
         opts["outtmpl"] = os.path.join(save_dir, "%(playlist_title,uploader|Misc)s", "%(title)s.%(ext)s")
@@ -238,15 +237,20 @@ def execute_download(job: dict):
     opts["postprocessor_hooks"] = [pp_hook]
     opts["logger"] = Log()
 
-    ok, err = True, None
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            if ydl.download([url]) and not got:
-                ok, err = False, (errors[-1] if errors else "Download failed")
-    except Exception as e:
-        if _stopped(job_id):
-            return
-        ok, err = False, str(e)
+    for subs in ((True, False) if SUB_LANGS else (False,)):  # YouTube 429s subtitle fetches; a missing subtitle must not fail the video
+        opts["writesubtitles"] = opts["writeautomaticsub"] = subs
+        ok, err = True, None
+        errors.clear()
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                if ydl.download([url]) and not got:
+                    ok, err = False, (errors[-1] if errors else "Download failed")
+        except Exception as e:
+            if _stopped(job_id):
+                return
+            ok, err = False, str(e)
+        if ok or "subtitles" not in (err or "").lower():
+            break
 
     if sid:
         nothing_new = ok and got == 0
