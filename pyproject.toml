@@ -6,6 +6,6 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi",
-    "uvicorn[standard]",
+    "uvicorn",
     "yt-dlp",
 ]

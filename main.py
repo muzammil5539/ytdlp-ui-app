@@ -36,6 +36,7 @@ MAX_CONCURRENT = int(os.environ.get("YTDLP_UI_MAX_CONCURRENT", "3"))
 MIN_FREE_GB = float(os.environ.get("YTDLP_UI_MIN_FREE_GB", "5"))
 TICK_SECONDS = 20
 ACTIVE = ("queued", "starting", "downloading", "processing")
+ACTIVE_SQL = "(" + ",".join(repr(s) for s in ACTIVE) + ")"  # constants, never user input
 
 download_semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 CANCEL: dict[str, str] = {}  # job_id -> "pause" | "cancel" | "delete"
@@ -119,9 +120,15 @@ def spawn(coro):
     t.add_done_callback(TASKS.discard)
 
 
+def execute(job_id: str):
+    job = get_job(job_id)
+    if job and not _stopped(job_id):
+        (execute_convert if job["kind"] == "convert" else execute_download)(job)
+
+
 async def run_job(job_id: str):
     async with download_semaphore:
-        await asyncio.to_thread(execute_download, job_id)
+        await asyncio.to_thread(execute, job_id)
 
 
 def open_path(path: str):
@@ -150,13 +157,9 @@ def _stopped(job_id: str) -> bool:
     return bool(flag)
 
 
-def execute_download(job_id: str):
+def execute_download(job: dict):
     """yt-dlp resumes partial files itself, so pause/resume is just stop/start."""
-    job = get_job(job_id)
-    if not job or _stopped(job_id):
-        return
-    if job["kind"] == "convert":
-        return execute_convert(job)
+    job_id = job["id"]
     url, fmt, prefix, sid = job["url"], job["format"] or "video", job["file_prefix"], job["schedule_id"]
     save_dir = resolve_dir(job["save_dir"])
     os.makedirs(save_dir, exist_ok=True)
@@ -193,28 +196,29 @@ def execute_download(job_id: str):
             opts["format"] = f"bestvideo[height<={height}]+bestaudio/best"
         opts["postprocessors"] = [{"key": "FFmpegEmbedSubtitle", "already_have_subtitle": False}]
 
-    last_write, peak, got = [0.0], [0.0], [0]
+    last_write, peak, got = 0.0, 0.0, 0
 
     def hook(d):
+        nonlocal last_write, peak, got
         flag = CANCEL.get(job_id)
         if flag:
             raise yt_dlp.utils.DownloadCancelled(flag)
         info = d.get("info_dict") or {}
         if d["status"] == "downloading":
             now = time.time()
-            if now - last_write[0] < 1.0:
+            if now - last_write < 1.0:
                 return
-            last_write[0] = now
+            last_write = now
             total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
             pct = (d.get("downloaded_bytes") or 0) / total * 100 if total else 0.0
             n, i = info.get("n_entries"), info.get("playlist_index")
             if n and i:
                 pct = ((i - 1) * 100 + pct) / n
-            peak[0] = max(peak[0], pct)  # video+audio are separate streams; never let the bar go backwards
-            update("jobs", job_id, status="downloading", percent=round(peak[0], 1),
+            peak = max(peak, pct)  # video+audio are separate streams; never let the bar go backwards
+            update("jobs", job_id, status="downloading", percent=round(peak, 1),
                    speed=d.get("speed"), eta=d.get("eta"), title=info.get("title"))
         elif d["status"] == "finished":
-            got[0] += 1
+            got += 1
             update("jobs", job_id, status="processing", speed=None, eta=None, title=info.get("title"),
                    filepath=d.get("filename"))
 
@@ -237,7 +241,7 @@ def execute_download(job_id: str):
     ok, err = True, None
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
-            if ydl.download([url]) and not got[0]:
+            if ydl.download([url]) and not got:
                 ok, err = False, (errors[-1] if errors else "Download failed")
     except Exception as e:
         if _stopped(job_id):
@@ -245,8 +249,8 @@ def execute_download(job_id: str):
         ok, err = False, str(e)
 
     if sid:
-        nothing_new = ok and got[0] == 0
-        result = "Nothing new" if nothing_new else f"{got[0]} file(s) downloaded" if ok else f"Failed: {err}"
+        nothing_new = ok and got == 0
+        result = "Nothing new" if nothing_new else f"{got} file(s) downloaded" if ok else f"Failed: {err}"
         update("schedules", sid, last_result=result)
         if nothing_new:  # don't clutter history with an empty run every N minutes
             q("DELETE FROM jobs WHERE id=?", (job_id,))
@@ -341,10 +345,12 @@ def execute_convert(job: dict):
         return update("jobs", job_id, status="error", error=str(e))
     finally:
         PROCS.discard(proc)
-    if _stopped(job_id):
+    stopped = _stopped(job_id)
+    if stopped or rc:
         out.unlink(missing_ok=True)  # a half-written file is useless; Resume starts over
-    elif rc:
-        out.unlink(missing_ok=True)
+    if stopped:
+        return
+    if rc:
         update("jobs", job_id, status="error", error=(err.splitlines() or [f"ffmpeg exited with {rc}"])[-1], eta=None)
     else:
         update("jobs", job_id, status="completed", percent=100, eta=None, filepath=str(out))
@@ -365,23 +371,19 @@ def compute_next_run(kind: str, at: str, every_min: int, now: datetime | None = 
 def launch_schedule(s: dict, now: float | None = None, advance: bool = True):
     """Start one run of schedule `s` and (unless advance=False) move its next_run forward."""
     now = now or time.time()
-    busy = q(f"SELECT 1 FROM jobs WHERE schedule_id=? AND status IN ({','.join('?' * len(ACTIVE))}) LIMIT 1",
-             (s["id"], *ACTIVE))
-    if busy:
-        update("schedules", s["id"], last_result="Skipped: previous run still going")
+    fields: dict = {"last_run": now}
+    if q(f"SELECT 1 FROM jobs WHERE schedule_id=? AND status IN {ACTIVE_SQL} LIMIT 1", (s["id"],)):
+        fields["last_result"] = "Skipped: previous run still going"
     else:
         job_id = new_job(url=s["url"], status="queued", format=s["format"], quality=s["quality"],
                          save_dir=s["save_dir"], title=s["name"], percent=0, schedule_id=s["id"])
-        update("schedules", s["id"], last_result="Running")
+        fields["last_result"] = "Running"
         spawn(run_job(job_id))
-    update("schedules", s["id"], last_run=now)
-    if not advance:
-        return
-    if s["kind"] == "once":
-        update("schedules", s["id"], enabled=0, next_run=None)
-    else:
-        update("schedules", s["id"],
-               next_run=compute_next_run(s["kind"], s["at"], s["every_min"], datetime.fromtimestamp(now)))
+    if advance and s["kind"] == "once":
+        fields.update(enabled=0, next_run=None)
+    elif advance:
+        fields["next_run"] = compute_next_run(s["kind"], s["at"], s["every_min"], datetime.fromtimestamp(now))
+    update("schedules", s["id"], **fields)
 
 
 def tick(now: float | None = None):
@@ -405,7 +407,7 @@ async def scheduler_loop():
 async def lifespan(app: FastAPI):
     init_db()
     # Anything that was mid-flight when we stopped goes back in the queue (yt-dlp resumes partials).
-    for job in q(f"SELECT id FROM jobs WHERE status IN ({','.join('?' * len(ACTIVE))})", ACTIVE):
+    for job in q(f"SELECT id FROM jobs WHERE status IN {ACTIVE_SQL}"):
         update("jobs", job["id"], status="queued")
         spawn(run_job(job["id"]))
     loop = asyncio.create_task(scheduler_loop())
@@ -413,7 +415,7 @@ async def lifespan(app: FastAPI):
     loop.cancel()
     # Stop running jobs so shutdown doesn't hang or orphan ffmpeg. Their rows stay "active",
     # so the next start puts them back in the queue.
-    for job in q(f"SELECT id FROM jobs WHERE status IN ({','.join('?' * len(ACTIVE))})", ACTIVE):
+    for job in q(f"SELECT id FROM jobs WHERE status IN {ACTIVE_SQL}"):
         CANCEL[job["id"]] = "shutdown"
     for proc in list(PROCS):
         proc.kill()
@@ -423,11 +425,14 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="yt-dlp UI", lifespan=lifespan)
 
 
-class DownloadRequest(BaseModel):
-    url: str
+class Options(BaseModel):  # what every download-ish request chooses
     format: Literal["video", "audio"] = "video"
     quality: str = "best"
     save_dir: str = ""
+
+
+class DownloadRequest(Options):
+    url: str
 
 
 class BatchItem(BaseModel):
@@ -435,11 +440,8 @@ class BatchItem(BaseModel):
     title: str
 
 
-class BatchDownloadRequest(BaseModel):
+class BatchDownloadRequest(Options):
     parent_title: str
-    format: Literal["video", "audio"] = "video"
-    quality: str = "best"
-    save_dir: str = ""
     items: list[BatchItem]
 
 
@@ -454,12 +456,9 @@ class ConvertRequest(BaseModel):
     save_dir: str = ""  # blank = next to each source file
 
 
-class ScheduleRequest(BaseModel):
+class ScheduleRequest(Options):
     name: str = ""
     url: str
-    format: Literal["video", "audio"] = "video"
-    quality: str = "best"
-    save_dir: str = ""
     kind: Literal["once", "every", "daily"]
     at: str = ""  # once: local "YYYY-MM-DDTHH:MM"; daily: "HH:MM"
     every_min: int = 0
@@ -473,8 +472,7 @@ async def root():
 
 @app.get("/api/config")
 async def config():
-    return {"home": str(HOME), "default_save_dir": resolve_dir(""), "max_concurrent": MAX_CONCURRENT,
-            "platform": sys.platform}
+    return {"default_save_dir": resolve_dir(""), "max_concurrent": MAX_CONCURRENT}
 
 
 @app.post("/api/resolve")
@@ -543,14 +541,6 @@ async def start_convert(req: ConvertRequest):
 async def list_jobs():
     # ponytail: no pagination; "Clear finished" keeps the list short. Add paging if history gets huge.
     return q("SELECT * FROM jobs ORDER BY created_at DESC, rowid DESC")
-
-
-@app.get("/api/status/{job_id}")
-async def get_status(job_id: str):
-    job = get_job(job_id)
-    if not job:
-        raise HTTPException(404, "not found")
-    return job
 
 
 def _halt(job_id: str, flag: str, status_if_queued: dict):

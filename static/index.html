@@ -356,7 +356,7 @@ const matches = j => filter === 'all' || (filter === 'active' && (ACTIVE.include
   (filter === 'done' && j.status === 'completed') || (filter === 'failed' && j.status === 'error');
 
 function renderQueue() {
-  const kids = jobs.filter(j => j.parent_id), parents = jobs.filter(j => j.status === 'playlist');
+  const kids = jobs.filter(j => j.parent_id);
   const flat = jobs.filter(j => j.status !== 'playlist');
   const n = { all: flat.length, active: flat.filter(j => ACTIVE.includes(j.status) || j.status === 'paused').length,
     done: flat.filter(j => j.status === 'completed').length, failed: flat.filter(j => j.status === 'error').length };
@@ -377,7 +377,7 @@ function renderQueue() {
       html += `<article class="job group s-${state} ${open ? 'open' : ''}" style="margin-top:6px">
         <div class="group-head" data-toggle="${esc(j.id)}" style="min-width:0" role="button" tabindex="0" aria-expanded="${open}">
           <div class="job-title">${esc(j.url)}</div><div class="job-sub mono">Playlist · ${done} of ${ch.length} done</div></div>
-        <div class="acts">${ico('folder', 'open', j.id, 'Open folder')}${ico('pause', 'pause', j.id, 'Pause all')}${ico('play', 'resume', j.id, 'Resume all')}${ico('stop', 'cancel', j.id, 'Cancel all')}${ico('x', 'delete', j.id, 'Remove playlist', 'danger')}${ico('chev', 'toggle', j.id, open ? 'Hide videos' : 'Show videos', 'chev')}</div>
+        <div class="acts">${ico('folder', 'open', j.id, 'Open folder')}${ico('pause', 'pause', j.id, 'Pause all')}${ico('play', 'resume', j.id, 'Resume all')}${ico('stop', 'cancel', j.id, 'Cancel all')}${ico('x', 'delete', j.id, 'Remove playlist', 'danger')}<button class="ico chev" data-toggle="${esc(j.id)}" title="${open ? 'Hide videos' : 'Show videos'}" aria-label="${open ? 'Hide videos' : 'Show videos'}"><svg viewBox="0 0 16 16">${I.chev}</svg></button></div>
         <div class="bar"><i style="width:${avg}%"></i></div></article>`;
       if (open) html += vis.map(c => jobRow(c, true)).join('');
     } else if (!j.parent_id && matches(j)) html += jobRow(j, false);
@@ -428,13 +428,13 @@ function render() {
   $('#nQueue').textContent = jobs.filter(j => j.status !== 'playlist' && (ACTIVE.includes(j.status) || j.status === 'paused')).length || '';
   if (view === 'queue') renderQueue(); else if (view === 'schedules') renderScheds();
 }
-async function poll() {
+async function refresh() {
   try {
     [jobs, scheds] = await Promise.all([api('/jobs'), api('/schedules')]);
     $('#dot').className = 'dot'; $('#conn').textContent = 'Connected'; render();
   } catch { $('#dot').className = 'dot off'; $('#conn').textContent = 'Server unreachable'; }
-  setTimeout(poll, view === 'schedules' ? 5000 : 1500);
 }
+const poll = async () => { await refresh(); setTimeout(poll, view === 'schedules' ? 5000 : 1500); };
 function setView(v) {
   view = v; store.set('view', v);
   VIEWS.forEach(n => $('#view-' + n).hidden = n !== v);
@@ -464,9 +464,8 @@ $('#dlForm').addEventListener('submit', guard(async e => {
     await queue(url);
   } finally { btn.disabled = false; btn.textContent = 'Download'; }
 }));
-const opts = () => ({ format: radio('fmt'), quality: $('#quality').value, save_dir: $('#saveDir').value.trim() });
-async function queue(url) { store.set('saveDir', $('#saveDir').value); await api('/download', 'POST', { url, ...opts() }); $('#url').value = ''; toast('Added to queue'); poll1(); }
-const poll1 = async () => { try { jobs = await api('/jobs'); render(); } catch {} };
+const opts = () => { store.set('saveDir', $('#saveDir').value); return { format: radio('fmt'), quality: $('#quality').value, save_dir: $('#saveDir').value.trim() }; };
+async function queue(url) { await api('/download', 'POST', { url, ...opts() }); $('#url').value = ''; toast('Added to queue'); refresh(); }
 
 let picked = null;
 function openPicker(r) {
@@ -481,13 +480,12 @@ $('#pickAll').addEventListener('change', e => { boxes().forEach(b => b.checked =
 $('#pick').addEventListener('close', guard(async () => {
   if ($('#pick').returnValue !== 'go') return;
   const items = boxes().filter(b => b.checked).map(b => picked.entries.filter(e => e.url)[b.dataset.i]);
-  store.set('saveDir', $('#saveDir').value);
   await api('/download_batch', 'POST', { parent_title: picked.title, items, ...opts() });
-  $('#url').value = ''; toast(`Queued ${items.length} videos`); poll1();
+  $('#url').value = ''; toast(`Queued ${items.length} videos`); refresh();
 }));
 
 $('#browse').onclick = guard(() => browseInto($('#saveDir')));
-$('#clear').onclick = guard(async () => { await api('/clear_finished', 'POST'); poll1(); });
+$('#clear').onclick = guard(async () => { await api('/clear_finished', 'POST'); refresh(); });
 document.querySelectorAll('input[name=fmt]').forEach(r => r.onchange = () => $('#qField').hidden = radio('fmt') === 'audio');
 
 document.addEventListener('click', guard(async e => {
@@ -495,20 +493,18 @@ document.addEventListener('click', guard(async e => {
   const t = e.target.closest('[data-toggle]'); if (t) { const id = t.dataset.toggle; expanded.has(id) ? expanded.delete(id) : expanded.add(id); return renderQueue(); }
   const b = e.target.closest('[data-act]'); if (b) {
     const { act, id } = b.dataset;
-    if (act === 'toggle') { expanded.has(id) ? expanded.delete(id) : expanded.add(id); return renderQueue(); }
     if (act === 'convert') { $('#cSources').value = jobs.find(j => j.id === id).filepath; return setView('convert'); }
-    if (act === 'sdelete') { await api('/schedules/' + id, 'DELETE'); toast('Schedule deleted'); return poll1().then(refreshScheds); }
+    if (act === 'sdelete') { await api('/schedules/' + id, 'DELETE'); toast('Schedule deleted'); return refresh(); }
     await api(act === 'delete' ? '/jobs/' + id : `/${act}/${id}`, act === 'delete' ? 'DELETE' : 'POST');
-    return poll1();
+    return refresh();
   }
   const s = e.target.closest('[data-sact]'); if (s) {
     const { sact, id } = s.dataset;
     await api(`/schedules/${id}/${sact}`, 'POST'); if (sact === 'run') toast('Started a run');
-    refreshScheds();
+    refresh();
   }
 }));
 document.addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.group-head')) { e.preventDefault(); e.target.click(); } });
-const refreshScheds = async () => { try { scheds = await api('/schedules'); jobs = await api('/jobs'); render(); } catch {} };
 
 /* ---------- schedule form ---------- */
 const syncKind = () => { $('#schForm').className = 'card kind-' + radio('kind'); $('#sNowWrap').hidden = radio('kind') === 'once'; };
@@ -524,7 +520,7 @@ $('#schForm').addEventListener('submit', guard(async e => {
     every_min: kind === 'every' ? Math.round(+$('#sEvery').value * +$('#sUnit').value) : 0 };
   if (kind === 'once' && !body.at) throw new Error('Pick a date and time for the one-off run.');
   await api('/schedules', 'POST', body);
-  $('#sUrl').value = ''; $('#sName').value = ''; toast('Schedule added'); refreshScheds();
+  $('#sUrl').value = ''; $('#sName').value = ''; toast('Schedule added'); refresh();
 }));
 
 /* ---------- convert ---------- */
@@ -537,7 +533,7 @@ $('#cvForm').addEventListener('submit', guard(async e => {
   const format = $('#cFormat').value;
   const r = await api('/convert', 'POST', { sources: $('#cSources').value.split('\n').map(x => x.trim()).filter(Boolean), format,
     height: AUDIO.includes(format) ? 0 : +$('#cHeight').value, save_dir: $('#cDir').value.trim() });
-  $('#cSources').value = ''; toast(`Converting ${r.queued} file${r.queued > 1 ? 's' : ''}`); setView('queue'); poll1();
+  $('#cSources').value = ''; toast(`Converting ${r.queued} file${r.queued > 1 ? 's' : ''}`); setView('queue'); refresh();
 }));
 
 /* ---------- boot ---------- */
