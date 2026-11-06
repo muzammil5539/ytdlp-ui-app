@@ -18,9 +18,25 @@ soon as the app is back up (it won't replay every missed slot).
 | `YTDLP_UI_MAX_CONCURRENT` | `3` | Parallel downloads. |
 | `YTDLP_UI_MIN_FREE_GB` | `5` | A download refuses to start with less free space than this. |
 | `YTDLP_UI_SUB_LANGS` | *(empty)* | Subtitle languages to fetch, e.g. `en` or `en,es`. Empty = no subtitles. |
+| `YTDLP_UI_ALLOWED_HOSTS` | loopback names | Host names the API answers to; anything else gets `421`. Binding to a real interface switches the check off. `*` disables it. |
 
-Install once: `uv sync` (needs `ffmpeg` on PATH for audio extraction and subtitle embedding).
+Install once: `uv sync`. Needs `ffmpeg` on PATH, and a JavaScript runtime (`deno`, `node`
+or `bun`) for YouTube.
 Run by hand: `uv run python main.py`, then open <http://127.0.0.1:8000/>.
+
+## Keep yt-dlp current
+
+Sites change constantly, and a yt-dlp more than a few months old is the commonest cause of
+downloads failing with `HTTP Error 403: Forbidden`. Update it and restart the service:
+
+```bash
+uv sync --upgrade-package yt-dlp
+systemctl --user restart ytdlp-ui      # Linux
+# Windows: Restart-ScheduledTask -TaskName "ytdlp-ui"
+```
+
+Worth doing on a schedule — monthly is plenty. The app warns in the UI once its yt-dlp
+passes 90 days old, and a 403 from a stale copy says so in the error text.
 
 ---
 
@@ -71,7 +87,7 @@ systemctl --user restart ytdlp-ui         # after editing the unit or updating c
 
 Notes
 - Under a service there is no desktop session, so **Browse…** and **Open folder** may do nothing; type the folder path instead.
-- To keep yt-dlp current (sites change often): `uv lock --upgrade-package yt-dlp && uv sync`, then restart.
+- To keep yt-dlp current: `uv sync --upgrade-package yt-dlp`, then `systemctl --user restart ytdlp-ui`.
 - System-wide service instead? Put the unit in `/etc/systemd/system/`, add `User=<you>` under `[Service]`, change `WantedBy=multi-user.target`, and use `sudo systemctl enable --now ytdlp-ui` (no `--user`, no linger).
 
 ---
