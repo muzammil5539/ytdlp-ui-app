@@ -22,7 +22,7 @@ from typing import Literal
 
 import yt_dlp
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -429,6 +429,27 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="yt-dlp UI", lifespan=lifespan)
 
 
+# The API reads and writes local files and has no login, so a page you merely visit must not reach it.
+# Browsers block cross-origin JSON posts, but DNS rebinding defeats that by pointing an attacker's
+# hostname at 127.0.0.1. Answering only to loopback names closes it. Binding to a real interface
+# (the documented "on a network you trust" case) switches the check off; set the names explicitly
+# with YTDLP_UI_ALLOWED_HOSTS ("*" for any).
+_hosts_env = os.environ.get("YTDLP_UI_ALLOWED_HOSTS", "").strip()
+ALLOWED_HOSTS = ({h.strip().lower() for h in _hosts_env.split(",") if h.strip()} if _hosts_env
+                 else {"localhost", "127.0.0.1", "::1"} if HOST in ("127.0.0.1", "localhost", "::1")
+                 else {"*"})
+
+
+@app.middleware("http")
+async def only_known_hosts(request, call_next):
+    if "*" not in ALLOWED_HOSTS:
+        host = (request.headers.get("host") or "").rsplit(":", 1)[0].strip("[]").lower()
+        if host and host not in ALLOWED_HOSTS:
+            return JSONResponse(status_code=421, content={
+                "detail": f"Host {host!r} is not allowed. Set YTDLP_UI_ALLOWED_HOSTS to permit it."})
+    return await call_next(request)
+
+
 class Options(BaseModel):  # what every download-ish request chooses
     format: Literal["video", "audio"] = "video"
     quality: str = "best"
@@ -490,7 +511,9 @@ async def resolve_url(req: ResolveRequest):
     try:
         info = await asyncio.to_thread(extract)
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": str(e)}  # 200 on purpose: the caller falls back to queueing the raw URL
+    if info is None:
+        return {"error": "Nothing could be read from that link."}
     if "entries" not in info:
         return {"type": "video", "title": info.get("title", "Video")}
     entries = []
@@ -579,17 +602,27 @@ async def resume(job_id: str):
 
 @app.delete("/api/jobs/{job_id}")
 async def delete_job(job_id: str):
-    for t in targets(job_id):
-        CANCEL[t["id"]] = "delete"
-    CANCEL[job_id] = "delete"
+    gone = [t["id"] for t in targets(job_id)] + [job_id]
+    for jid in gone:
+        CANCEL[jid] = "delete"
     q("DELETE FROM jobs WHERE id=? OR parent_id=?", (job_id, job_id))
+    # The flag only has to outlive the worker thread's next hook; forget it after that so
+    # CANCEL can't grow for the life of the process.
+    spawn(forget_flags(gone))
     return {"status": "ok"}
+
+
+async def forget_flags(job_ids: list[str], delay: float = 30.0):
+    await asyncio.sleep(delay)
+    for jid in job_ids:
+        CANCEL.pop(jid, None)
 
 
 @app.post("/api/clear_finished")
 async def clear_finished():
+    # Finished means completed or failed. A paused job is work in progress and is kept.
     # Leaves playlist parents that still have children alone.
-    q("DELETE FROM jobs WHERE status IN ('completed','error','paused') AND parent_id IS NULL")
+    q("DELETE FROM jobs WHERE status IN ('completed','error') AND parent_id IS NULL")
     q("DELETE FROM jobs WHERE status IN ('completed','error') AND parent_id IS NOT NULL")
     q("DELETE FROM jobs WHERE status='playlist' AND id NOT IN (SELECT parent_id FROM jobs WHERE parent_id IS NOT NULL)")
     return {"status": "ok"}
