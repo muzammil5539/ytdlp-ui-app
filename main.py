@@ -22,7 +22,7 @@ from typing import Literal
 
 import yt_dlp
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -36,6 +36,29 @@ MAX_CONCURRENT = int(os.environ.get("YTDLP_UI_MAX_CONCURRENT", "3"))
 MIN_FREE_GB = float(os.environ.get("YTDLP_UI_MIN_FREE_GB", "5"))
 SUB_LANGS = [x for x in os.environ.get("YTDLP_UI_SUB_LANGS", "").split(",") if x.strip()]  # e.g. "en" or "en,es"; empty = no subtitles
 TICK_SECONDS = 20
+STALE_AFTER_DAYS = 90  # yt-dlp's own warning threshold
+
+
+def js_runtime() -> str | None:
+    """yt-dlp enables only deno by default, and YouTube extraction without a JS runtime is
+    deprecated (it falls back to player clients whose media URLs get 403'd). Use whatever
+    runtime is actually on this machine."""
+    for name in ("deno", "node", "bun"):
+        if shutil.which(name):
+            return name
+    return None
+
+
+def ytdlp_age_days() -> int | None:
+    """yt-dlp versions are dates. A stale one is the single commonest cause of 403s and
+    'unable to extract' errors, because YouTube changes faster than a pinned release."""
+    try:
+        return (datetime.now() - datetime.strptime(yt_dlp.version.__version__[:10], "%Y.%m.%d")).days
+    except (ValueError, AttributeError):
+        return None
+
+
+JS_RUNTIME = None  # resolved on startup so the UI can report it
 ACTIVE = ("queued", "starting", "downloading", "processing")
 ACTIVE_SQL = "(" + ",".join(repr(s) for s in ACTIVE) + ")"  # constants, never user input
 
@@ -178,6 +201,8 @@ def execute_download(job: dict):
         "no_color": True,
         "subtitleslangs": [x.strip() for x in SUB_LANGS],
     }
+    if JS_RUNTIME:
+        opts["js_runtimes"] = {JS_RUNTIME: {}}  # the API wants {runtime: {config}}, not the CLI's list
     if sid:  # scheduled run: whole URL (maybe a playlist/channel), skip what an earlier run got
         opts["outtmpl"] = os.path.join(save_dir, "%(playlist_title,uploader|Misc)s", "%(title)s.%(ext)s")
         opts["download_archive"] = str(ARCHIVES / f"{sid}.txt")
@@ -262,7 +287,21 @@ def execute_download(job: dict):
     if ok:
         update("jobs", job_id, status="completed", percent=100, speed=None, eta=None, error=None)
     else:
-        update("jobs", job_id, status="error", error=err, speed=None, eta=None)
+        update("jobs", job_id, status="error", error=explain(err), speed=None, eta=None)
+
+
+def explain(err: str | None) -> str:
+    """Turn yt-dlp's raw message into something the person reading it can act on."""
+    err = err or "Download failed"
+    low = err.lower()
+    age = ytdlp_age_days()
+    if ("403" in err or "forbidden" in low or "unable to extract" in low or "nsig" in low) \
+            and age is not None and age > STALE_AFTER_DAYS:
+        return (f"{err}\n\nThis yt-dlp is {age} days old, which is the usual cause: "
+                f"YouTube changes faster than a release. Update it with  uv sync --upgrade-package yt-dlp")
+    if "no supported javascript runtime" in low or (not JS_RUNTIME and "403" in err):
+        return f"{err}\n\nNo JavaScript runtime was found. Install deno, node or bun and restart."
+    return err
 
 
 # ---------------------------------------------------------------- convert
@@ -409,7 +448,16 @@ async def scheduler_loop():
 # ---------------------------------------------------------------- app
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global JS_RUNTIME
+    JS_RUNTIME = js_runtime()
     init_db()
+    age = ytdlp_age_days()
+    if age is not None and age > STALE_AFTER_DAYS:
+        print(f"warning: yt-dlp {yt_dlp.version.__version__} is {age} days old; expect 403s. "
+              f"Update with: uv sync --upgrade-package yt-dlp", file=sys.stderr)
+    if not JS_RUNTIME:
+        print("warning: no JavaScript runtime (deno/node/bun) found; some formats will be missing.",
+              file=sys.stderr)
     # Anything that was mid-flight when we stopped goes back in the queue (yt-dlp resumes partials).
     for job in q(f"SELECT id FROM jobs WHERE status IN {ACTIVE_SQL}"):
         update("jobs", job["id"], status="queued")
@@ -427,6 +475,27 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="yt-dlp UI", lifespan=lifespan)
+
+
+# The API reads and writes local files and has no login, so a page you merely visit must not reach it.
+# Browsers block cross-origin JSON posts, but DNS rebinding defeats that by pointing an attacker's
+# hostname at 127.0.0.1. Answering only to loopback names closes it. Binding to a real interface
+# (the documented "on a network you trust" case) switches the check off; set the names explicitly
+# with YTDLP_UI_ALLOWED_HOSTS ("*" for any).
+_hosts_env = os.environ.get("YTDLP_UI_ALLOWED_HOSTS", "").strip()
+ALLOWED_HOSTS = ({h.strip().lower() for h in _hosts_env.split(",") if h.strip()} if _hosts_env
+                 else {"localhost", "127.0.0.1", "::1"} if HOST in ("127.0.0.1", "localhost", "::1")
+                 else {"*"})
+
+
+@app.middleware("http")
+async def only_known_hosts(request, call_next):
+    if "*" not in ALLOWED_HOSTS:
+        host = (request.headers.get("host") or "").rsplit(":", 1)[0].strip("[]").lower()
+        if host and host not in ALLOWED_HOSTS:
+            return JSONResponse(status_code=421, content={
+                "detail": f"Host {host!r} is not allowed. Set YTDLP_UI_ALLOWED_HOSTS to permit it."})
+    return await call_next(request)
 
 
 class Options(BaseModel):  # what every download-ish request chooses
@@ -476,7 +545,16 @@ async def root():
 
 @app.get("/api/config")
 async def config():
-    return {"default_save_dir": resolve_dir(""), "max_concurrent": MAX_CONCURRENT}
+    age = ytdlp_age_days()
+    return {
+        "default_save_dir": resolve_dir(""),
+        "max_concurrent": MAX_CONCURRENT,
+        "ytdlp_version": yt_dlp.version.__version__,
+        "ytdlp_age_days": age,
+        "ytdlp_stale": age is not None and age > STALE_AFTER_DAYS,
+        "js_runtime": JS_RUNTIME,
+        "ffmpeg": bool(shutil.which("ffmpeg")),
+    }
 
 
 @app.post("/api/resolve")
@@ -490,7 +568,9 @@ async def resolve_url(req: ResolveRequest):
     try:
         info = await asyncio.to_thread(extract)
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": str(e)}  # 200 on purpose: the caller falls back to queueing the raw URL
+    if info is None:
+        return {"error": "Nothing could be read from that link."}
     if "entries" not in info:
         return {"type": "video", "title": info.get("title", "Video")}
     entries = []
@@ -579,17 +659,27 @@ async def resume(job_id: str):
 
 @app.delete("/api/jobs/{job_id}")
 async def delete_job(job_id: str):
-    for t in targets(job_id):
-        CANCEL[t["id"]] = "delete"
-    CANCEL[job_id] = "delete"
+    gone = [t["id"] for t in targets(job_id)] + [job_id]
+    for jid in gone:
+        CANCEL[jid] = "delete"
     q("DELETE FROM jobs WHERE id=? OR parent_id=?", (job_id, job_id))
+    # The flag only has to outlive the worker thread's next hook; forget it after that so
+    # CANCEL can't grow for the life of the process.
+    spawn(forget_flags(gone))
     return {"status": "ok"}
+
+
+async def forget_flags(job_ids: list[str], delay: float = 30.0):
+    await asyncio.sleep(delay)
+    for jid in job_ids:
+        CANCEL.pop(jid, None)
 
 
 @app.post("/api/clear_finished")
 async def clear_finished():
+    # Finished means completed or failed. A paused job is work in progress and is kept.
     # Leaves playlist parents that still have children alone.
-    q("DELETE FROM jobs WHERE status IN ('completed','error','paused') AND parent_id IS NULL")
+    q("DELETE FROM jobs WHERE status IN ('completed','error') AND parent_id IS NULL")
     q("DELETE FROM jobs WHERE status IN ('completed','error') AND parent_id IS NOT NULL")
     q("DELETE FROM jobs WHERE status='playlist' AND id NOT IN (SELECT parent_id FROM jobs WHERE parent_id IS NOT NULL)")
     return {"status": "ok"}
