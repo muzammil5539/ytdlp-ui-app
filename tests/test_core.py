@@ -155,3 +155,70 @@ def test_relative_save_dirs_land_under_home_and_absolute_ones_are_left_alone(app
     assert app_env.resolve_dir("") == str(tmp_path / "downloads")
     assert app_env.resolve_dir("clips") == str(tmp_path / "clips")
     assert app_env.resolve_dir("/srv/media") == "/srv/media"
+
+
+# ---------------------------------------------------------------- error messages / health
+def test_a_403_on_a_stale_ytdlp_says_to_update_it(app_env, monkeypatch):
+    """The 403 this produces is almost always a stale yt-dlp, and the raw message says
+    nothing about that. Regression for a real report."""
+    monkeypatch.setattr(app_env, "ytdlp_age_days", lambda: 150)
+    out = app_env.explain("ERROR: unable to download video data: HTTP Error 403: Forbidden")
+    assert "150 days old" in out and "upgrade-package yt-dlp" in out
+    assert "403" in out, "the original message must survive"
+
+
+def test_a_403_on_a_current_ytdlp_is_left_alone(app_env, monkeypatch):
+    monkeypatch.setattr(app_env, "ytdlp_age_days", lambda: 3)
+    monkeypatch.setattr(app_env, "JS_RUNTIME", "node")
+    raw = "ERROR: unable to download video data: HTTP Error 403: Forbidden"
+    assert app_env.explain(raw) == raw
+
+
+def test_a_missing_js_runtime_is_explained(app_env, monkeypatch):
+    monkeypatch.setattr(app_env, "JS_RUNTIME", None)
+    monkeypatch.setattr(app_env, "ytdlp_age_days", lambda: 3)
+    assert "JavaScript runtime" in app_env.explain("HTTP Error 403: Forbidden")
+
+
+def test_explain_copes_with_no_message_at_all(app_env):
+    assert app_env.explain(None) and app_env.explain("")
+
+
+def test_the_version_age_is_read_from_the_version_string(app_env, monkeypatch):
+    monkeypatch.setattr(app_env.yt_dlp.version, "__version__", "2020.01.01")
+    assert app_env.ytdlp_age_days() > 2000
+    monkeypatch.setattr(app_env.yt_dlp.version, "__version__", "nightly")
+    assert app_env.ytdlp_age_days() is None
+
+
+def test_a_js_runtime_is_found_when_one_is_installed(app_env, monkeypatch):
+    monkeypatch.setattr(app_env.shutil, "which", lambda n: "/usr/bin/" + n if n == "node" else None)
+    assert app_env.js_runtime() == "node"
+    monkeypatch.setattr(app_env.shutil, "which", lambda n: None)
+    assert app_env.js_runtime() is None
+
+
+def test_the_download_options_are_ones_ytdlp_actually_accepts(app_env, monkeypatch, tmp_path):
+    """Regression: js_runtimes was passed as the CLI's list, and yt-dlp's Python API wants
+    {runtime: {config}}. Unit tests on our own helpers could not see it, so build the real
+    option dict and let yt-dlp validate it."""
+    monkeypatch.setattr(app_env, "JS_RUNTIME", "node")
+    monkeypatch.setattr(app_env, "MIN_FREE_GB", 0)  # the free-space guard is not what this checks
+    captured = {}
+
+    class CaptureYDL:
+        def __init__(self, opts): captured.update(opts)
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def download(self, urls): return 0
+
+    monkeypatch.setattr(app_env.yt_dlp, "YoutubeDL", CaptureYDL)
+    job_id = app_env.new_job(url="https://example.invalid/v", status="queued",
+                             format="video", quality="720p", save_dir=str(tmp_path))
+    app_env.execute_download(app_env.get_job(job_id))
+
+    assert captured["js_runtimes"] == {"node": {}}
+    # Hand the whole dict to the real yt-dlp: it raises on anything malformed.
+    import yt_dlp
+    with yt_dlp.YoutubeDL({**captured, "simulate": True}):
+        pass

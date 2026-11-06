@@ -36,6 +36,29 @@ MAX_CONCURRENT = int(os.environ.get("YTDLP_UI_MAX_CONCURRENT", "3"))
 MIN_FREE_GB = float(os.environ.get("YTDLP_UI_MIN_FREE_GB", "5"))
 SUB_LANGS = [x for x in os.environ.get("YTDLP_UI_SUB_LANGS", "").split(",") if x.strip()]  # e.g. "en" or "en,es"; empty = no subtitles
 TICK_SECONDS = 20
+STALE_AFTER_DAYS = 90  # yt-dlp's own warning threshold
+
+
+def js_runtime() -> str | None:
+    """yt-dlp enables only deno by default, and YouTube extraction without a JS runtime is
+    deprecated (it falls back to player clients whose media URLs get 403'd). Use whatever
+    runtime is actually on this machine."""
+    for name in ("deno", "node", "bun"):
+        if shutil.which(name):
+            return name
+    return None
+
+
+def ytdlp_age_days() -> int | None:
+    """yt-dlp versions are dates. A stale one is the single commonest cause of 403s and
+    'unable to extract' errors, because YouTube changes faster than a pinned release."""
+    try:
+        return (datetime.now() - datetime.strptime(yt_dlp.version.__version__[:10], "%Y.%m.%d")).days
+    except (ValueError, AttributeError):
+        return None
+
+
+JS_RUNTIME = None  # resolved on startup so the UI can report it
 ACTIVE = ("queued", "starting", "downloading", "processing")
 ACTIVE_SQL = "(" + ",".join(repr(s) for s in ACTIVE) + ")"  # constants, never user input
 
@@ -178,6 +201,8 @@ def execute_download(job: dict):
         "no_color": True,
         "subtitleslangs": [x.strip() for x in SUB_LANGS],
     }
+    if JS_RUNTIME:
+        opts["js_runtimes"] = {JS_RUNTIME: {}}  # the API wants {runtime: {config}}, not the CLI's list
     if sid:  # scheduled run: whole URL (maybe a playlist/channel), skip what an earlier run got
         opts["outtmpl"] = os.path.join(save_dir, "%(playlist_title,uploader|Misc)s", "%(title)s.%(ext)s")
         opts["download_archive"] = str(ARCHIVES / f"{sid}.txt")
@@ -262,7 +287,21 @@ def execute_download(job: dict):
     if ok:
         update("jobs", job_id, status="completed", percent=100, speed=None, eta=None, error=None)
     else:
-        update("jobs", job_id, status="error", error=err, speed=None, eta=None)
+        update("jobs", job_id, status="error", error=explain(err), speed=None, eta=None)
+
+
+def explain(err: str | None) -> str:
+    """Turn yt-dlp's raw message into something the person reading it can act on."""
+    err = err or "Download failed"
+    low = err.lower()
+    age = ytdlp_age_days()
+    if ("403" in err or "forbidden" in low or "unable to extract" in low or "nsig" in low) \
+            and age is not None and age > STALE_AFTER_DAYS:
+        return (f"{err}\n\nThis yt-dlp is {age} days old, which is the usual cause: "
+                f"YouTube changes faster than a release. Update it with  uv sync --upgrade-package yt-dlp")
+    if "no supported javascript runtime" in low or (not JS_RUNTIME and "403" in err):
+        return f"{err}\n\nNo JavaScript runtime was found. Install deno, node or bun and restart."
+    return err
 
 
 # ---------------------------------------------------------------- convert
@@ -409,7 +448,16 @@ async def scheduler_loop():
 # ---------------------------------------------------------------- app
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global JS_RUNTIME
+    JS_RUNTIME = js_runtime()
     init_db()
+    age = ytdlp_age_days()
+    if age is not None and age > STALE_AFTER_DAYS:
+        print(f"warning: yt-dlp {yt_dlp.version.__version__} is {age} days old; expect 403s. "
+              f"Update with: uv sync --upgrade-package yt-dlp", file=sys.stderr)
+    if not JS_RUNTIME:
+        print("warning: no JavaScript runtime (deno/node/bun) found; some formats will be missing.",
+              file=sys.stderr)
     # Anything that was mid-flight when we stopped goes back in the queue (yt-dlp resumes partials).
     for job in q(f"SELECT id FROM jobs WHERE status IN {ACTIVE_SQL}"):
         update("jobs", job["id"], status="queued")
@@ -497,7 +545,16 @@ async def root():
 
 @app.get("/api/config")
 async def config():
-    return {"default_save_dir": resolve_dir(""), "max_concurrent": MAX_CONCURRENT}
+    age = ytdlp_age_days()
+    return {
+        "default_save_dir": resolve_dir(""),
+        "max_concurrent": MAX_CONCURRENT,
+        "ytdlp_version": yt_dlp.version.__version__,
+        "ytdlp_age_days": age,
+        "ytdlp_stale": age is not None and age > STALE_AFTER_DAYS,
+        "js_runtime": JS_RUNTIME,
+        "ffmpeg": bool(shutil.which("ffmpeg")),
+    }
 
 
 @app.post("/api/resolve")

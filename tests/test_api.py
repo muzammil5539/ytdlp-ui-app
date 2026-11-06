@@ -332,3 +332,16 @@ def test_a_rebound_hostname_is_turned_away(client, app_env, monkeypatch):
 def test_binding_to_a_real_interface_switches_the_check_off(client, app_env, monkeypatch):
     monkeypatch.setattr(app_env, "ALLOWED_HOSTS", {"*"})
     assert client.get("/api/jobs", headers={"host": "nas.local:8000"}).status_code == 200
+
+
+def test_config_reports_what_the_machine_can_actually_do(client, app_env):
+    """The UI warns about a stale yt-dlp from this, so these keys are part of the contract."""
+    body = client.get("/api/config").json()
+    assert set(body) >= {"default_save_dir", "max_concurrent", "ytdlp_version",
+                         "ytdlp_age_days", "ytdlp_stale", "js_runtime", "ffmpeg"}
+    assert isinstance(body["ytdlp_stale"], bool)
+
+
+def test_config_flags_a_stale_ytdlp(client, app_env, monkeypatch):
+    monkeypatch.setattr(app_env, "ytdlp_age_days", lambda: 400)
+    assert client.get("/api/config").json()["ytdlp_stale"] is True
